@@ -14,13 +14,15 @@ This repository implements a control-plane-first PoC aligned to the architecture
 ## Current MVP scope
 
 - user registry driven (not hardcoded in code): `config/users.json`
-- user API token auth on control-plane endpoints (`x-user-token`)
+- user API token auth on control-plane endpoints (`x-user-token`) with token->user boundary checks
 - agent token validation per user (internal agent/control-plane path)
 - control plane can spawn site containers with runtime profiles:
   - `static` (busybox httpd)
   - `node` (node:20-alpine with `npm run <script>` and persistent runtime data mount)
-- model-backed agent generation via OpenAI SDK, with deterministic fallback template if model call fails or key is unavailable
+- model-backed agent generation via per-request OpenAI credential injection, with deterministic fallback template when user credential is unavailable
 - score-tracker fallback now defaults to Node + SQLite persistence (cross-browser/device data retention)
+- agent dispatch retries with structured failure reasons before user-facing failure (`AGENT_OFFLINE`, `WS_SEND_FAILED`, `AGENT_TIMEOUT`)
+- OpenAI OAuth control-plane plumbing (start/status/callback/disconnect) with per-user credential storage
 - no Clerk/JWT, memory/LCM, `unf`, or full monitoring stack yet
 
 ## Quick start
@@ -32,7 +34,10 @@ This repository implements a control-plane-first PoC aligned to the architecture
    - `docker compose exec platform-control-plane npm run cli -- status tester`
 4. Clear user sites when needed:
    - `docker compose exec platform-control-plane npm run cli -- clear-sites tester`
-5. Force deterministic runtime for testing:
+5. Check OpenAI OAuth status / start connection:
+   - `docker compose exec platform-control-plane npm run cli -- oauth-status tester`
+   - `docker compose exec platform-control-plane npm run cli -- oauth-start tester`
+6. Force deterministic runtime for testing:
    - `docker compose exec platform-control-plane npm run cli -- send --user tester "[runtime:node] Build a score tracker"`
    - `docker compose exec platform-control-plane npm run cli -- send --user tester "[runtime:static] Build a score tracker"`
 
@@ -61,9 +66,11 @@ The node smoke test additionally validates:
 ## Auth notes
 
 - `config/users.json` contains both:
-  - `userToken` for external control-plane API calls (`/api/messages`, `/api/status`, `/api/sites`)
+  - `userToken` for external control-plane API calls (`/api/messages`, `/api/status`, `/api/sites`, `/api/auth/openai/*`)
   - `agentToken` for internal agent->control-plane calls
 - CLI sends `x-user-token` automatically via `CLI_USER_TOKEN` env (defaults to `tester-app-token`).
+- OpenAI OAuth callback endpoint is `/auth/openai/callback`.
+- User OpenAI credentials are persisted under `/data/users/<userId>/oauth/openai-credential.json`.
 
 ## Environment notes
 

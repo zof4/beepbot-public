@@ -3,9 +3,10 @@ const { randomUUID } = require('crypto');
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const { z } = require('zod');
-const { config, getUserWorkspaceRootHost } = require('./config');
+const { config, getUserWorkspaceRootHost, getUserOauthDir } = require('./config');
 const { spawnSiteContainer, listManagedSites, removeManagedSites, sanitizeSlug } = require('./docker');
-const { loadUserRegistry, buildUserMap } = require('./users');
+const { loadUserRegistry, buildUserMap, buildUserTokenMap } = require('./users');
+const { createOauthManager } = require('./oauth');
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -15,11 +16,17 @@ const wss = new WebSocketServer({ noServer: true });
 
 const registry = loadUserRegistry(config.userRegistryPath);
 const usersById = buildUserMap(registry);
+const usersByToken = buildUserTokenMap(registry);
 
 const fallbackDefaultUserId = registry.users[0].id;
 const resolvedDefaultUserId = usersById.has(config.defaultUserId)
   ? config.defaultUserId
   : fallbackDefaultUserId;
+
+const oauthManager = createOauthManager({
+  oauthConfig: config.oauth,
+  getUserOauthDir
+});
 
 const connectedAgents = new Map();
 const pendingReplies = new Map();
@@ -42,44 +49,149 @@ const spawnSiteSchema = z.object({
   runtime: runtimeSchema.optional()
 });
 
+function delay(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 function getUserById(userId) {
   return usersById.get(userId) || null;
 }
 
-function isAuthorizedUserRequest(req, user) {
-  const userToken = req.headers['x-user-token'];
-  return typeof userToken === 'string' && userToken.length > 0 && userToken === user.userToken;
+function getAuthenticatedUser(req) {
+  const token = req.headers['x-user-token'];
+  if (typeof token !== 'string' || !token) {
+    return null;
+  }
+
+  return usersByToken.get(token) || null;
 }
 
-function sendToAgent(userId, payload) {
+function requireAuthenticatedUser(req, res, requestedUserId) {
+  const user = getAuthenticatedUser(req);
+  if (!user) {
+    res.status(401).json({ error: 'Unauthorized user token' });
+    return null;
+  }
+
+  if (requestedUserId && requestedUserId !== user.id) {
+    res.status(403).json({ error: `Token does not grant access to userId=${requestedUserId}` });
+    return null;
+  }
+
+  return user;
+}
+
+async function sendToAgent(userId, payload) {
   const ws = connectedAgents.get(userId);
   if (!ws || ws.readyState !== ws.OPEN) {
     throw new Error(`Agent for user ${userId} is not connected`);
   }
 
-  ws.send(JSON.stringify(payload));
-}
-
-function awaitAgentResponse(requestId) {
-  return new Promise((resolve, reject) => {
-    const timeoutId = setTimeout(() => {
-      pendingReplies.delete(requestId);
-      reject(new Error('Agent response timed out'));
-    }, config.maxAgentResponseMs);
-
-    pendingReplies.set(requestId, {
-      resolve: (value) => {
-        clearTimeout(timeoutId);
-        pendingReplies.delete(requestId);
-        resolve(value);
-      },
-      reject: (error) => {
-        clearTimeout(timeoutId);
-        pendingReplies.delete(requestId);
-        reject(error);
+  await new Promise((resolve, reject) => {
+    ws.send(JSON.stringify(payload), (error) => {
+      if (error) {
+        reject(new Error(`Failed to send message to agent for user ${userId}: ${error.message}`));
+        return;
       }
+      resolve();
     });
   });
+}
+
+function createPendingReply(requestId) {
+  let timeoutId = null;
+  let resolvePending;
+  let rejectPending;
+
+  const promise = new Promise((resolve, reject) => {
+    resolvePending = resolve;
+    rejectPending = reject;
+  });
+
+  timeoutId = setTimeout(() => {
+    pendingReplies.delete(requestId);
+    rejectPending(new Error('Agent response timed out'));
+  }, config.maxAgentResponseMs);
+
+  pendingReplies.set(requestId, {
+    resolve: (value) => {
+      clearTimeout(timeoutId);
+      pendingReplies.delete(requestId);
+      resolvePending(value);
+    },
+    reject: (error) => {
+      clearTimeout(timeoutId);
+      pendingReplies.delete(requestId);
+      rejectPending(error);
+    }
+  });
+
+  return {
+    promise,
+    cancel: () => {
+      clearTimeout(timeoutId);
+      pendingReplies.delete(requestId);
+    }
+  };
+}
+
+function classifyDispatchError(error) {
+  const message = String(error?.message || 'Unknown dispatch error');
+  if (/not connected/i.test(message)) {
+    return 'AGENT_OFFLINE';
+  }
+  if (/failed to send/i.test(message)) {
+    return 'WS_SEND_FAILED';
+  }
+  return 'AGENT_DISPATCH_FAILED';
+}
+
+async function dispatchToAgentWithRetries({ userId, payload }) {
+  const attempts = [];
+
+  for (let index = 0; index < config.agentDispatchRetryDelaysMs.length; index += 1) {
+    const waitMs = config.agentDispatchRetryDelaysMs[index];
+    if (waitMs > 0) {
+      await delay(waitMs);
+    }
+
+    const attempt = index + 1;
+    const startedAt = new Date().toISOString();
+
+    try {
+      await sendToAgent(userId, payload);
+      attempts.push({
+        attempt,
+        waitMs,
+        at: startedAt,
+        status: 'sent'
+      });
+
+      return {
+        sent: true,
+        attempts
+      };
+    } catch (error) {
+      attempts.push({
+        attempt,
+        waitMs,
+        at: startedAt,
+        status: 'failed',
+        reasonCode: classifyDispatchError(error),
+        reason: error.message
+      });
+    }
+  }
+
+  const finalFailure = attempts[attempts.length - 1] || null;
+  return {
+    sent: false,
+    attempts,
+    finalReasonCode: finalFailure?.reasonCode || 'AGENT_DISPATCH_FAILED',
+    finalReason: finalFailure?.reason || 'Unable to dispatch to agent'
+  };
 }
 
 async function enforceSiteQuota({ user, userId, requestedSubdomain }) {
@@ -104,50 +216,45 @@ app.get('/health', (_req, res) => {
     loadedUsers: Array.from(usersById.keys()),
     defaultUserId: resolvedDefaultUserId,
     connectedAgents: Array.from(connectedAgents.keys()),
-    pendingRequests: pendingReplies.size
+    pendingRequests: pendingReplies.size,
+    dispatchRetryDelaysMs: config.agentDispatchRetryDelaysMs,
+    openAiOauthConfigured: oauthManager.isConfigured()
   });
 });
 
 app.get('/api/status', async (req, res) => {
-  const userId = String(req.query.userId || resolvedDefaultUserId);
-  const user = getUserById(userId);
+  const requestedUserId = req.query.userId ? String(req.query.userId) : null;
+  const user = requireAuthenticatedUser(req, res, requestedUserId);
   if (!user) {
-    res.status(404).json({ error: `Unknown user: ${userId}` });
-    return;
-  }
-  if (!isAuthorizedUserRequest(req, user)) {
-    res.status(401).json({ error: 'Unauthorized user token' });
     return;
   }
 
-  const sites = await listManagedSites(userId);
+  const sites = await listManagedSites(user.id);
+  const openAi = await oauthManager.getCredentialStatus(user.id);
 
   res.json({
-    userId,
+    userId: user.id,
     defaultUserId: resolvedDefaultUserId,
-    agentConnected: connectedAgents.has(userId),
+    agentConnected: connectedAgents.has(user.id),
     activeSites: sites,
-    quota: user.quotas
+    quota: user.quotas,
+    openAi
   });
 });
 
 app.delete('/api/sites', async (req, res) => {
-  const userId = String(req.query.userId || resolvedDefaultUserId);
-  const siteId = req.query.siteId ? String(req.query.siteId) : undefined;
-  const user = getUserById(userId);
+  const requestedUserId = req.query.userId ? String(req.query.userId) : null;
+  const user = requireAuthenticatedUser(req, res, requestedUserId);
   if (!user) {
-    res.status(404).json({ error: `Unknown user: ${userId}` });
-    return;
-  }
-  if (!isAuthorizedUserRequest(req, user)) {
-    res.status(401).json({ error: 'Unauthorized user token' });
     return;
   }
 
+  const siteId = req.query.siteId ? String(req.query.siteId) : undefined;
+
   try {
-    const result = await removeManagedSites({ userId, siteId });
+    const result = await removeManagedSites({ userId: user.id, siteId });
     res.json({
-      userId,
+      userId: user.id,
       siteId: siteId || null,
       removedCount: result.removedCount,
       removed: result.removed
@@ -164,39 +271,145 @@ app.post('/api/messages', async (req, res) => {
     return;
   }
 
-  const userId = parsed.data.userId || resolvedDefaultUserId;
-  const user = getUserById(userId);
+  const requestedUserId = parsed.data.userId || null;
+  const user = requireAuthenticatedUser(req, res, requestedUserId);
   if (!user) {
-    res.status(404).json({ error: `Unknown user: ${userId}` });
-    return;
-  }
-  if (!isAuthorizedUserRequest(req, user)) {
-    res.status(401).json({ error: 'Unauthorized user token' });
     return;
   }
 
   const requestId = randomUUID();
   const message = parsed.data.message;
-  let agentReplyPromise;
+  const pendingReply = createPendingReply(requestId);
 
   try {
-    agentReplyPromise = awaitAgentResponse(requestId);
-    sendToAgent(userId, {
-      type: 'user_message',
+    const openAiAccessToken = await oauthManager.getUsableAccessToken(user.id);
+
+    const dispatchResult = await dispatchToAgentWithRetries({
+      userId: user.id,
+      payload: {
+        type: 'user_message',
+        requestId,
+        userId: user.id,
+        message,
+        llmAuth: openAiAccessToken
+          ? {
+              provider: 'openai',
+              accessToken: openAiAccessToken
+            }
+          : null
+      }
+    });
+
+    if (!dispatchResult.sent) {
+      pendingReply.cancel();
+      res.status(503).json({
+        requestId,
+        error: 'Agent unavailable after retry attempts',
+        reasonCode: dispatchResult.finalReasonCode,
+        reason: dispatchResult.finalReason,
+        attempts: dispatchResult.attempts
+      });
+      return;
+    }
+
+    const reply = await pendingReply.promise;
+    res.json({
       requestId,
-      userId,
-      message
+      reply,
+      dispatch: {
+        attempts: dispatchResult.attempts
+      }
     });
   } catch (error) {
-    res.status(503).json({ error: error.message });
+    pendingReply.cancel();
+    if (/timed out/i.test(String(error.message))) {
+      res.status(504).json({
+        requestId,
+        error: error.message,
+        reasonCode: 'AGENT_TIMEOUT'
+      });
+      return;
+    }
+
+    res.status(500).json({
+      requestId,
+      error: error.message,
+      reasonCode: 'AGENT_REQUEST_FAILED'
+    });
+  }
+});
+
+app.get('/api/auth/openai/status', async (req, res) => {
+  const requestedUserId = req.query.userId ? String(req.query.userId) : null;
+  const user = requireAuthenticatedUser(req, res, requestedUserId);
+  if (!user) {
+    return;
+  }
+
+  const status = await oauthManager.getCredentialStatus(user.id);
+  res.json({
+    userId: user.id,
+    ...status
+  });
+});
+
+app.get('/api/auth/openai/start', (req, res) => {
+  const requestedUserId = req.query.userId ? String(req.query.userId) : null;
+  const user = requireAuthenticatedUser(req, res, requestedUserId);
+  if (!user) {
     return;
   }
 
   try {
-    const reply = await agentReplyPromise;
-    res.json({ requestId, reply });
+    const authorization = oauthManager.createAuthorizationRequest(user.id);
+    res.json({
+      userId: user.id,
+      ...authorization
+    });
   } catch (error) {
-    res.status(504).json({ requestId, error: error.message });
+    res.status(501).json({ error: error.message });
+  }
+});
+
+app.delete('/api/auth/openai/connection', async (req, res) => {
+  const requestedUserId = req.query.userId ? String(req.query.userId) : null;
+  const user = requireAuthenticatedUser(req, res, requestedUserId);
+  if (!user) {
+    return;
+  }
+
+  try {
+    await oauthManager.clearCredential(user.id);
+    res.json({
+      userId: user.id,
+      disconnected: true
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/auth/openai/callback', async (req, res) => {
+  const state = req.query.state ? String(req.query.state) : '';
+  const code = req.query.code ? String(req.query.code) : '';
+  const providerError = req.query.error ? String(req.query.error) : '';
+  const providerErrorDescription = req.query.error_description ? String(req.query.error_description) : '';
+
+  if (providerError) {
+    res.status(400).send(`OpenAI OAuth failed: ${providerErrorDescription || providerError}`);
+    return;
+  }
+
+  if (!state || !code) {
+    res.status(400).send('OpenAI OAuth callback missing state or code');
+    return;
+  }
+
+  try {
+    const result = await oauthManager.completeAuthorization({ state, code });
+    res.status(200).send(`OpenAI account connected for user ${result.userId}. You can return to the app.`);
+  } catch (error) {
+    res.status(400).send(`OpenAI OAuth callback failed: ${error.message}`);
   }
 });
 
@@ -295,7 +508,6 @@ wss.on('connection', (ws) => {
       if (pending) {
         pending.reject(new Error(payload.error || 'Unknown agent error'));
       }
-      return;
     }
   });
 

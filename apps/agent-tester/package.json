@@ -5,7 +5,7 @@
   "type": "commonjs",
   "scripts": {
     "start": "node src/agent.js",
-    "check": "node --check src/agent.js && node --check src/project-generator.js && node --check src/project-template.js"
+    "check": "node --check src/agent.js && node --check src/project-generator.js && node --check src/project-template.js && node --check src/codex-runner.js"
   },
   "dependencies": {
     "openai": "^5.16.0",

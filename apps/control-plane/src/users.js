@@ -19,14 +19,42 @@ const registrySchema = z.object({
 
 function loadUserRegistry(userRegistryPath) {
   const raw = fs.readFileSync(userRegistryPath, 'utf8');
-  return registrySchema.parse(JSON.parse(raw));
+  const registry = registrySchema.parse(JSON.parse(raw));
+
+  const userIds = new Set();
+  const userTokens = new Set();
+  const agentTokens = new Set();
+
+  for (const user of registry.users) {
+    if (userIds.has(user.id)) {
+      throw new Error(`Duplicate user id in registry: ${user.id}`);
+    }
+    userIds.add(user.id);
+
+    if (userTokens.has(user.userToken)) {
+      throw new Error(`Duplicate user token in registry for user: ${user.id}`);
+    }
+    userTokens.add(user.userToken);
+
+    if (agentTokens.has(user.agentToken)) {
+      throw new Error(`Duplicate agent token in registry for user: ${user.id}`);
+    }
+    agentTokens.add(user.agentToken);
+  }
+
+  return registry;
 }
 
 function buildUserMap(registry) {
   return new Map(registry.users.map((user) => [user.id, user]));
 }
 
+function buildUserTokenMap(registry) {
+  return new Map(registry.users.map((user) => [user.userToken, user]));
+}
+
 module.exports = {
   loadUserRegistry,
-  buildUserMap
+  buildUserMap,
+  buildUserTokenMap
 };

@@ -25,6 +25,9 @@ function usage() {
   console.log('  npm run cli -- status [userId]');
   console.log('  npm run cli -- sites [userId]');
   console.log('  npm run cli -- clear-sites [userId] [siteId]');
+  console.log('  npm run cli -- oauth-status [userId]');
+  console.log('  npm run cli -- oauth-start [userId]');
+  console.log('  npm run cli -- oauth-disconnect [userId]');
   console.log('  npm run cli -- send [--user <userId>] "Build me a basketball score tracker website"');
 }
 
@@ -59,6 +62,29 @@ async function main() {
       query.set('siteId', siteId);
     }
     const response = await request(`/api/sites?${query.toString()}`, {
+      method: 'DELETE'
+    });
+    console.log(JSON.stringify(response, null, 2));
+    return;
+  }
+
+  if (command === 'oauth-status') {
+    const userId = args[0] || defaultUser;
+    const status = await request(`/api/auth/openai/status?userId=${encodeURIComponent(userId)}`);
+    console.log(JSON.stringify(status, null, 2));
+    return;
+  }
+
+  if (command === 'oauth-start') {
+    const userId = args[0] || defaultUser;
+    const response = await request(`/api/auth/openai/start?userId=${encodeURIComponent(userId)}`);
+    console.log(JSON.stringify(response, null, 2));
+    return;
+  }
+
+  if (command === 'oauth-disconnect') {
+    const userId = args[0] || defaultUser;
+    const response = await request(`/api/auth/openai/connection?userId=${encodeURIComponent(userId)}`, {
       method: 'DELETE'
     });
     console.log(JSON.stringify(response, null, 2));

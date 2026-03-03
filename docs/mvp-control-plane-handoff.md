@@ -43,11 +43,14 @@ Implemented in:
 Behavior now includes:
 
 - per-user API token validation for external control-plane endpoints
+- token-to-user boundary enforcement (user token can access only its own `userId`)
 - per-user agent token validation
 - configurable default user
 - quota stubs per user (`maxActiveSites`, `dailyTokenLimit`)
 - status endpoint scoped by `userId`
 - site cleanup endpoint (`DELETE /api/sites`) via control plane API/CLI
+- retry-based agent dispatch before failing user requests
+- OpenAI OAuth endpoints for user credential connect/disconnect/status
 
 ### 3) Sister container runtime profiles
 
@@ -83,7 +86,7 @@ Implemented in:
 
 Behavior:
 
-- attempts structured JSON project generation from model (`AGENT_MODEL`, default `gpt-5-codex`)
+- attempts structured JSON project generation from model (`AGENT_MODEL`, default `gpt-5-codex`) when a user OpenAI credential exists
 - validates output shape and node runtime requirements
 - fallback for score-tracker prompts now defaults to Node + SQLite persistence
 - falls back to local static template for non-score-tracker prompts
@@ -91,6 +94,7 @@ Behavior:
   - `[runtime:static]`
   - `[runtime:node]`
 - sends runtime profile to control plane for matching site spawn
+- no longer depends on a mandatory platform-wide OpenAI API key
 
 ## Mapping to architecture sections
 
@@ -117,6 +121,7 @@ Improved authority and lifecycle controls:
 - user-config-driven routing
 - quota checks before site spawn
 - user API auth + agent auth token validation tied to user registry
+- retry-and-reason dispatch policy when agent is unavailable
 
 ### Section 12 (Data Flow)
 
@@ -132,14 +137,17 @@ The end-to-end path is now continuously testable through smoke automation.
    - `docker compose exec platform-control-plane npm run cli -- status tester`
 4. Clear sites:
    - `docker compose exec platform-control-plane npm run cli -- clear-sites tester`
-5. Run full smoke:
+5. OAuth status/start:
+   - `docker compose exec platform-control-plane npm run cli -- oauth-status tester`
+   - `docker compose exec platform-control-plane npm run cli -- oauth-start tester`
+6. Run full smoke:
    - `./scripts/smoke-test.sh`
-6. Run node runtime smoke:
+7. Run node runtime smoke:
    - `./scripts/smoke-test-node.sh`
 
 ## What remains unimplemented
 
-1. Clerk/JWT/OpenAI OAuth full auth flow (Section 10).
+1. Clerk/JWT full auth flow (Section 10).
 2. Persistent memory system (`MEMORY.md`, sqlite-vec, FTS5) (Section 5).
 3. LCM immutable context + compaction DAG (Section 6).
 4. `unf` backup/rewind integration and restore workflow (Section 7).
@@ -147,6 +155,7 @@ The end-to-end path is now continuously testable through smoke automation.
 6. Real multi-user container lifecycle orchestration (agent start/stop policies, warm pools).
 7. Strict sister-container egress firewall rules.
 8. Billing/resource enforcement beyond simple active-site quota checks.
+9. OAuth token refresh flow and encryption-at-rest hardening for stored credentials.
 
 ## Production path notes (Oracle Linux)
 

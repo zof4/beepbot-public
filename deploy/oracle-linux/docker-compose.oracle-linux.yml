@@ -7,6 +7,13 @@ services:
       SISTER_DOMAIN_SUFFIX: ${SISTER_DOMAIN_SUFFIX:-127.0.0.1.nip.io}
       CADDY_SITE_SCHEME: ${CADDY_SITE_SCHEME:-https}
       CADDY_EXTERNAL_PORT: ${CADDY_EXTERNAL_PORT:-80}
+      AGENT_DISPATCH_RETRY_DELAYS_MS: ${AGENT_DISPATCH_RETRY_DELAYS_MS:-0,2000,6000,15000,30000}
+      OPENAI_OAUTH_AUTHORIZATION_URL: ${OPENAI_OAUTH_AUTHORIZATION_URL:-}
+      OPENAI_OAUTH_TOKEN_URL: ${OPENAI_OAUTH_TOKEN_URL:-}
+      OPENAI_OAUTH_CLIENT_ID: ${OPENAI_OAUTH_CLIENT_ID:-}
+      OPENAI_OAUTH_CLIENT_SECRET: ${OPENAI_OAUTH_CLIENT_SECRET:-}
+      OPENAI_OAUTH_REDIRECT_URI: ${OPENAI_OAUTH_REDIRECT_URI:-}
+      OPENAI_OAUTH_SCOPES: ${OPENAI_OAUTH_SCOPES:-openid profile offline_access}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${USER_DATA_ROOT_HOST:-/data/users}:/data/users
@@ -16,7 +23,7 @@ services:
 
   agent-tester:
     environment:
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-dev-placeholder}
+      AGENT_DEV_OPENAI_API_KEY: ${AGENT_DEV_OPENAI_API_KEY:-}
       AGENT_MODEL: ${AGENT_MODEL:-gpt-5-codex}
     volumes:
       - ${USER_DATA_ROOT_HOST:-/data/users}/${DEFAULT_USER_ID:-tester}/workspace:/workspace

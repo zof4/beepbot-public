@@ -32,7 +32,7 @@ services:
     environment:
       AGENT_USER_ID: tester
       AGENT_TOKEN: tester-dev-token
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-dev-placeholder}
+      AGENT_DEV_OPENAI_API_KEY: ${AGENT_DEV_OPENAI_API_KEY:-}
       AGENT_MODEL: ${AGENT_MODEL:-gpt-5-codex}
       CONTROL_PLANE_WS_URL: ws://platform-control-plane:3001/agent
       CONTROL_PLANE_HTTP_URL: http://platform-control-plane:3001

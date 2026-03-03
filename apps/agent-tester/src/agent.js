@@ -1,14 +1,14 @@
 const fs = require('fs/promises');
 const path = require('path');
 const { WebSocket } = require('ws');
-const { generateProjectSpec, isScoreTrackerPrompt } = require('./project-generator');
+const { generateProjectSpec, isScoreTrackerPrompt, hasUsableOpenAiKey } = require('./project-generator');
 const { buildFallbackProjectSpec, buildFallbackNodeProjectSpec } = require('./project-template');
 
 const config = {
   userId: process.env.AGENT_USER_ID || 'tester',
   agentToken: process.env.AGENT_TOKEN || 'tester-dev-token',
   model: process.env.AGENT_MODEL || 'gpt-5-codex',
-  openAiApiKey: process.env.OPENAI_API_KEY || '',
+  devOpenAiApiKey: process.env.AGENT_DEV_OPENAI_API_KEY || '',
   controlPlaneWsUrl: process.env.CONTROL_PLANE_WS_URL || 'ws://localhost:3001/agent',
   controlPlaneHttpUrl: process.env.CONTROL_PLANE_HTTP_URL || 'http://localhost:3001',
   workspaceRoot: process.env.WORKSPACE_ROOT || '/workspace'
@@ -90,8 +90,30 @@ async function writeProjectFiles(projectRoot, files) {
   await Promise.all(writeTasks);
 }
 
-async function createProjectFromPrompt(promptText) {
+function resolveOpenAiCredential(llmAuth) {
+  if (llmAuth && llmAuth.provider === 'openai' && hasUsableOpenAiKey(llmAuth.accessToken)) {
+    return {
+      source: 'user-oauth',
+      apiKey: llmAuth.accessToken
+    };
+  }
+
+  if (hasUsableOpenAiKey(config.devOpenAiApiKey)) {
+    return {
+      source: 'agent-dev-key',
+      apiKey: config.devOpenAiApiKey
+    };
+  }
+
+  return {
+    source: 'none',
+    apiKey: ''
+  };
+}
+
+async function createProjectFromPrompt(promptText, llmAuth) {
   const runtimeHint = detectRuntimeHint(promptText);
+  const openAiCredential = resolveOpenAiCredential(llmAuth);
   let generation;
 
   if (runtimeHint === 'node') {
@@ -108,7 +130,7 @@ async function createProjectFromPrompt(promptText) {
     };
   } else {
     generation = await generateProjectSpec({
-      openAiApiKey: config.openAiApiKey,
+      openAiApiKey: openAiCredential.apiKey,
       model: config.model,
       promptText
     });
@@ -140,7 +162,8 @@ async function createProjectFromPrompt(promptText) {
     summary: generation.spec.summary,
     runtime: generation.spec.runtime,
     generationMode: generation.mode,
-    generationReason: generation.reason
+    generationReason: generation.reason,
+    llmCredentialSource: openAiCredential.source
   };
 }
 
@@ -168,10 +191,10 @@ async function spawnSite({ projectDir, subdomain, runtime }) {
 }
 
 async function processUserMessage(payload, ws) {
-  const { requestId, message } = payload;
+  const { requestId, message, llmAuth } = payload;
 
   try {
-    const project = await createProjectFromPrompt(message);
+    const project = await createProjectFromPrompt(message, llmAuth);
     const subdomain = toSlug(`${config.userId}-${project.projectSlug}`);
     const site = await spawnSite({
       projectDir: project.projectSlug,
@@ -195,6 +218,7 @@ async function processUserMessage(payload, ws) {
           summary: project.summary,
           generationMode: project.generationMode,
           generationReason: project.generationReason,
+          llmCredentialSource: project.llmCredentialSource,
           runtime: project.runtime,
           site
         }

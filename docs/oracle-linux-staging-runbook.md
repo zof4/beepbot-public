@@ -42,11 +42,20 @@ Use this starter content and adjust tokens/users as needed:
 
 1. Copy `deploy/oracle-linux/.env.example` to `deploy/oracle-linux/.env`.
 2. Set real values for:
-   - `OPENAI_API_KEY`
    - `SISTER_DOMAIN_SUFFIX`
    - `CADDY_SITE_SCHEME` (`https` for real domain/TLS, `http` for local-only staging)
    - `CLI_USER_TOKEN` (must match `users.json -> userToken` for CLI/API calls)
+   - `AGENT_DISPATCH_RETRY_DELAYS_MS` (optional; defaults to `0,2000,6000,15000,30000`)
    - any bind port overrides
+
+OpenAI OAuth configuration (required to enable user-connected model generation):
+
+- `OPENAI_OAUTH_AUTHORIZATION_URL`
+- `OPENAI_OAUTH_TOKEN_URL`
+- `OPENAI_OAUTH_CLIENT_ID`
+- `OPENAI_OAUTH_CLIENT_SECRET` (if required by your OpenAI OAuth app type)
+- `OPENAI_OAUTH_REDIRECT_URI` (must point to `https://<control-plane-domain>/auth/openai/callback`)
+- `OPENAI_OAUTH_SCOPES`
 
 ## 4) Start stack
 
@@ -66,6 +75,8 @@ docker compose \
 curl http://localhost:3001/health
 docker compose exec platform-control-plane npm run cli -- status tester
 docker compose exec platform-control-plane npm run cli -- send --user tester "Build me a basketball score tracker website"
+docker compose exec platform-control-plane npm run cli -- oauth-status tester
+docker compose exec platform-control-plane npm run cli -- oauth-start tester
 ```
 
 Then open the returned URL:
@@ -78,6 +89,12 @@ Optional API auth check:
 curl -H 'x-user-token: tester-app-token' \
   'http://localhost:3001/api/status?userId=tester'
 ```
+
+Connect OpenAI account manually:
+
+1. Run `npm run cli -- oauth-start tester`.
+2. Open `authorizationUrl` in browser and complete consent.
+3. Ensure callback returns `OpenAI account connected for user tester`.
 
 ## 6) Stop stack
 

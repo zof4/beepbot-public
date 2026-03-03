@@ -161,7 +161,7 @@ async function generateProjectSpec({ openAiApiKey, model, promptText }) {
   if (!hasUsableOpenAiKey(openAiApiKey)) {
     return {
       mode: 'fallback',
-      reason: 'No usable OPENAI_API_KEY configured',
+      reason: 'No usable OpenAI credential available for this user',
       spec: getFallbackSpec(promptText)
     };
   }
@@ -190,5 +190,6 @@ async function generateProjectSpec({ openAiApiKey, model, promptText }) {
 module.exports = {
   generateProjectSpec,
   getFallbackSpec,
-  isScoreTrackerPrompt
+  isScoreTrackerPrompt,
+  hasUsableOpenAiKey
 };
