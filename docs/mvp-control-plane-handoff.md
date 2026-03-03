@@ -10,7 +10,7 @@ This document records implemented work, how it maps to the architecture plan, an
 
 Added:
 
-- `scripts/smoke-test.sh` for static/default flow
+- `scripts/smoke-test.sh` for default flow
 - `scripts/smoke-test-node.sh` for deterministic node runtime flow
 
 These validate the full control-plane path:
@@ -30,7 +30,7 @@ Node smoke additionally verifies:
 
 This converts the PoC from one-off demo behavior into repeatable quality gates for both runtime branches.
 
-### 2) Control plane user/config layer
+### 2) Control plane user/config layer + API auth
 
 Replaced hardcoded user logic with a registry loaded from `config/users.json`.
 
@@ -42,6 +42,7 @@ Implemented in:
 
 Behavior now includes:
 
+- per-user API token validation for external control-plane endpoints
 - per-user agent token validation
 - configurable default user
 - quota stubs per user (`maxActiveSites`, `dailyTokenLimit`)
@@ -65,6 +66,7 @@ Supported profiles:
   - Node container copies source from read-only mount
   - installs dependencies (`npm ci` or `npm install`)
   - executes `npm run <startScript>`
+  - mounts per-project persistent runtime data directory (`.runtime-data`) for server-side state
   - reverse-proxied to configured internal port
 
 Control plane still remains the only Docker API authority.
@@ -83,7 +85,8 @@ Behavior:
 
 - attempts structured JSON project generation from model (`AGENT_MODEL`, default `gpt-5-codex`)
 - validates output shape and node runtime requirements
-- falls back to local score-tracker template if key is missing or generation fails
+- fallback for score-tracker prompts now defaults to Node + SQLite persistence
+- falls back to local static template for non-score-tracker prompts
 - supports deterministic runtime hints in prompt:
   - `[runtime:static]`
   - `[runtime:node]`
@@ -97,6 +100,7 @@ Now closer to intended behavior:
 
 - control plane message -> agent execution -> generated project artifacts -> streamed response
 - model-backed generation is active (with fallback safeguard)
+- score-tracker fallback now uses server-side SQLite persistence
 
 ### Section 8 (Website Hosting / Sister Containers)
 
@@ -112,7 +116,7 @@ Improved authority and lifecycle controls:
 
 - user-config-driven routing
 - quota checks before site spawn
-- token validation tied to user registry
+- user API auth + agent auth token validation tied to user registry
 
 ### Section 12 (Data Flow)
 
@@ -135,7 +139,7 @@ The end-to-end path is now continuously testable through smoke automation.
 
 ## What remains unimplemented
 
-1. Clerk/JWT/OpenAI OAuth auth flow (Section 10).
+1. Clerk/JWT/OpenAI OAuth full auth flow (Section 10).
 2. Persistent memory system (`MEMORY.md`, sqlite-vec, FTS5) (Section 5).
 3. LCM immutable context + compaction DAG (Section 6).
 4. `unf` backup/rewind integration and restore workflow (Section 7).

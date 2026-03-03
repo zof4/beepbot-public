@@ -1,6 +1,7 @@
 services:
   platform-control-plane:
     environment:
+      CLI_USER_TOKEN: ${CLI_USER_TOKEN:-tester-app-token}
       USER_DATA_ROOT: /data/users
       USER_DATA_ROOT_HOST: ${USER_DATA_ROOT_HOST:-/data/users}
       SISTER_DOMAIN_SUFFIX: ${SISTER_DOMAIN_SUFFIX:-127.0.0.1.nip.io}

@@ -1,11 +1,13 @@
 const baseUrl = process.env.CONTROL_PLANE_HTTP_URL || 'http://localhost:3001';
 const defaultUser = process.env.CLI_USER_ID || process.env.DEFAULT_USER_ID || 'tester';
+const userToken = process.env.CLI_USER_TOKEN || 'tester-app-token';
 
 async function request(path, options = {}) {
   const response = await fetch(`${baseUrl}${path}`, {
     ...options,
     headers: {
       'content-type': 'application/json',
+      'x-user-token': userToken,
       ...(options.headers || {})
     }
   });

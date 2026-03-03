@@ -1,6 +1,6 @@
 const OpenAI = require('openai');
 const { z } = require('zod');
-const { buildFallbackProjectSpec } = require('./project-template');
+const { buildFallbackProjectSpec, buildFallbackNodeProjectSpec } = require('./project-template');
 
 const projectSpecSchema = z.object({
   projectTitle: z.string().min(1).max(120),
@@ -85,15 +85,27 @@ function hasUsableOpenAiKey(key) {
   return Boolean(key && key.startsWith('sk-') && !key.includes('placeholder'));
 }
 
+function isScoreTrackerPrompt(promptText) {
+  return /(score|scoreboard|league|tracker|standings|basketball|soccer|football|baseball|hockey)/i.test(promptText);
+}
+
+function getFallbackSpec(promptText) {
+  if (isScoreTrackerPrompt(promptText)) {
+    return buildFallbackNodeProjectSpec(promptText);
+  }
+  return buildFallbackProjectSpec(promptText);
+}
+
 function buildSystemPrompt() {
   return [
     'You are a senior software builder creating production-quality starter projects for an autonomous agent runtime.',
     'Return only JSON matching the required schema.',
-    'Prefer static sites unless dynamic server behavior is clearly required by the prompt.',
+    'For score tracking, data entry, or small CRUD apps, prefer runtime.profile="node" with SQLite persistence.',
     'If using runtime.profile="node":',
     '- include a valid package.json with a script matching runtime.startScript',
     '- ensure server listens on process.env.PORT or runtime.internalPort',
     '- include all files needed to run successfully',
+    '- persist critical app data on disk (SQLite preferred)',
     'Do not include markdown fences or explanations outside JSON.'
   ].join('\n');
 }
@@ -107,7 +119,7 @@ function buildUserPrompt(promptText) {
     '- Keep implementation concise but complete.',
     '- Use clear file names and maintainable code.',
     '- Include a README.md with run notes.',
-    '- For a score-tracker or simple utility, static runtime is acceptable and preferred.',
+    '- For score tracking or list management, return a node runtime with server-side persistence.',
     '- Avoid placeholders like TODO.'
   ].join('\n');
 }
@@ -150,7 +162,7 @@ async function generateProjectSpec({ openAiApiKey, model, promptText }) {
     return {
       mode: 'fallback',
       reason: 'No usable OPENAI_API_KEY configured',
-      spec: buildFallbackProjectSpec(promptText)
+      spec: getFallbackSpec(promptText)
     };
   }
 
@@ -170,11 +182,13 @@ async function generateProjectSpec({ openAiApiKey, model, promptText }) {
     return {
       mode: 'fallback',
       reason: `Model generation failed: ${error.message}`,
-      spec: buildFallbackProjectSpec(promptText)
+      spec: getFallbackSpec(promptText)
     };
   }
 }
 
 module.exports = {
-  generateProjectSpec
+  generateProjectSpec,
+  getFallbackSpec,
+  isScoreTrackerPrompt
 };

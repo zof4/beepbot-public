@@ -78,12 +78,13 @@ function normalizeRuntime(runtime) {
 function buildNodeRuntimeCommand(startScript) {
   return [
     'set -e',
-    'rm -rf /home/node/app',
-    'mkdir -p /home/node/app',
-    'cp -R /src/. /home/node/app/',
-    'cd /home/node/app',
+    'rm -rf /app',
+    'mkdir -p /app',
+    'cp -R /workspace/. /app/',
+    'cd /app',
     'if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit=dev; fi',
-    `npm run ${startScript}`
+    'mkdir -p /runtime-data',
+    `DATA_DIR=/runtime-data npm run ${startScript}`
   ].join(' && ');
 }
 
@@ -139,12 +140,11 @@ function buildContainerSpec({ runtime, workspacePath, domain, sisterNetwork, use
       ExposedPorts: {
         [portKey]: {}
       },
-      User: 'node',
-      Env: [`PORT=${runtime.internalPort}`],
+      Env: [`PORT=${runtime.internalPort}`, 'DATA_DIR=/runtime-data'],
       Cmd: ['sh', '-lc', buildNodeRuntimeCommand(runtime.startScript)],
       HostConfig: {
         AutoRemove: true,
-        Binds: [`${workspacePath}:/src:ro`],
+        Binds: [`${workspacePath}:/workspace:ro`, `${workspacePath}/.runtime-data:/runtime-data:rw`],
         Memory: 256 * 1024 * 1024,
         NanoCpus: 500000000,
         CapDrop: ['ALL'],

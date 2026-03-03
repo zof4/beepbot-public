@@ -1,7 +1,7 @@
 const fs = require('fs/promises');
 const path = require('path');
 const { WebSocket } = require('ws');
-const { generateProjectSpec } = require('./project-generator');
+const { generateProjectSpec, isScoreTrackerPrompt } = require('./project-generator');
 const { buildFallbackProjectSpec, buildFallbackNodeProjectSpec } = require('./project-template');
 
 const config = {
@@ -117,10 +117,14 @@ async function createProjectFromPrompt(promptText) {
   try {
     ensureNodeSpecIsRunnable(generation.spec);
   } catch (error) {
+    const fallbackSpec = isScoreTrackerPrompt(promptText)
+      ? buildFallbackNodeProjectSpec(promptText)
+      : buildFallbackProjectSpec(promptText);
+
     generation = {
       mode: 'fallback',
       reason: `Generated spec failed runtime validation: ${error.message}`,
-      spec: buildFallbackProjectSpec(promptText)
+      spec: fallbackSpec
     };
   }
 

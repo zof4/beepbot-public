@@ -3,6 +3,7 @@ const { z } = require('zod');
 
 const userSchema = z.object({
   id: z.string().min(1),
+  userToken: z.string().min(1),
   agentToken: z.string().min(1),
   quotas: z
     .object({

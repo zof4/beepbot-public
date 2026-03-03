@@ -46,6 +46,11 @@ function getUserById(userId) {
   return usersById.get(userId) || null;
 }
 
+function isAuthorizedUserRequest(req, user) {
+  const userToken = req.headers['x-user-token'];
+  return typeof userToken === 'string' && userToken.length > 0 && userToken === user.userToken;
+}
+
 function sendToAgent(userId, payload) {
   const ws = connectedAgents.get(userId);
   if (!ws || ws.readyState !== ws.OPEN) {
@@ -110,6 +115,10 @@ app.get('/api/status', async (req, res) => {
     res.status(404).json({ error: `Unknown user: ${userId}` });
     return;
   }
+  if (!isAuthorizedUserRequest(req, user)) {
+    res.status(401).json({ error: 'Unauthorized user token' });
+    return;
+  }
 
   const sites = await listManagedSites(userId);
 
@@ -128,6 +137,10 @@ app.delete('/api/sites', async (req, res) => {
   const user = getUserById(userId);
   if (!user) {
     res.status(404).json({ error: `Unknown user: ${userId}` });
+    return;
+  }
+  if (!isAuthorizedUserRequest(req, user)) {
+    res.status(401).json({ error: 'Unauthorized user token' });
     return;
   }
 
@@ -155,6 +168,10 @@ app.post('/api/messages', async (req, res) => {
   const user = getUserById(userId);
   if (!user) {
     res.status(404).json({ error: `Unknown user: ${userId}` });
+    return;
+  }
+  if (!isAuthorizedUserRequest(req, user)) {
+    res.status(401).json({ error: 'Unauthorized user token' });
     return;
   }
 

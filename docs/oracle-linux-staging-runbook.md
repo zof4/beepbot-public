@@ -27,6 +27,7 @@ Use this starter content and adjust tokens/users as needed:
   "users": [
     {
       "id": "tester",
+      "userToken": "tester-app-token",
       "agentToken": "tester-dev-token",
       "quotas": {
         "maxActiveSites": 3,
@@ -44,6 +45,7 @@ Use this starter content and adjust tokens/users as needed:
    - `OPENAI_API_KEY`
    - `SISTER_DOMAIN_SUFFIX`
    - `CADDY_SITE_SCHEME` (`https` for real domain/TLS, `http` for local-only staging)
+   - `CLI_USER_TOKEN` (must match `users.json -> userToken` for CLI/API calls)
    - any bind port overrides
 
 ## 4) Start stack
@@ -69,6 +71,13 @@ docker compose exec platform-control-plane npm run cli -- send --user tester "Bu
 Then open the returned URL:
 
 - `http://<subdomain>.<SISTER_DOMAIN_SUFFIX>`
+
+Optional API auth check:
+
+```bash
+curl -H 'x-user-token: tester-app-token' \
+  'http://localhost:3001/api/status?userId=tester'
+```
 
 ## 6) Stop stack
 

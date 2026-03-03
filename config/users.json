@@ -2,6 +2,7 @@
   "users": [
     {
       "id": "tester",
+      "userToken": "tester-app-token",
       "agentToken": "tester-dev-token",
       "quotas": {
         "maxActiveSites": 3,

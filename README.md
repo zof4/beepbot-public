@@ -14,11 +14,13 @@ This repository implements a control-plane-first PoC aligned to the architecture
 ## Current MVP scope
 
 - user registry driven (not hardcoded in code): `config/users.json`
-- agent token validation per user
+- user API token auth on control-plane endpoints (`x-user-token`)
+- agent token validation per user (internal agent/control-plane path)
 - control plane can spawn site containers with runtime profiles:
   - `static` (busybox httpd)
-  - `node` (node:20-alpine with `npm run <script>`)
+  - `node` (node:20-alpine with `npm run <script>` and persistent runtime data mount)
 - model-backed agent generation via OpenAI SDK, with deterministic fallback template if model call fails or key is unavailable
+- score-tracker fallback now defaults to Node + SQLite persistence (cross-browser/device data retention)
 - no Clerk/JWT, memory/LCM, `unf`, or full monitoring stack yet
 
 ## Quick start
@@ -55,6 +57,13 @@ The node smoke test additionally validates:
 1. deterministic node runtime generation using `[runtime:node]`
 2. runtime profile is `node`
 3. `/health` endpoint on the spawned site reports `runtime=node`
+
+## Auth notes
+
+- `config/users.json` contains both:
+  - `userToken` for external control-plane API calls (`/api/messages`, `/api/status`, `/api/sites`)
+  - `agentToken` for internal agent->control-plane calls
+- CLI sends `x-user-token` automatically via `CLI_USER_TOKEN` env (defaults to `tester-app-token`).
 
 ## Environment notes
 
