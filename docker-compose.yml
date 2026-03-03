@@ -1,0 +1,71 @@
+services:
+  platform-control-plane:
+    build:
+      context: ./apps/control-plane
+    container_name: platform-control-plane
+    environment:
+      CONTROL_PLANE_PORT: 3001
+      HARD_CODED_USER_ID: tester
+      HARD_CODED_USER_TOKEN: tester-dev-token
+      HARD_CODED_OPENAI_KEY: ${OPENAI_API_KEY:-sk-dev-placeholder}
+      USER_DATA_ROOT: /data/users
+      USER_DATA_ROOT_HOST: ${PWD}/data/users
+      SISTER_NETWORK: site-net
+      SISTER_DOMAIN_SUFFIX: 127.0.0.1.nip.io
+      CADDY_EXTERNAL_PORT: 8080
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data/users:/data/users
+    ports:
+      - "3001:3001"
+    networks:
+      - platform-core
+
+  agent-tester:
+    build:
+      context: ./apps/agent-tester
+    container_name: agent-tester
+    depends_on:
+      - platform-control-plane
+    environment:
+      AGENT_USER_ID: tester
+      AGENT_TOKEN: tester-dev-token
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-dev-placeholder}
+      CONTROL_PLANE_WS_URL: ws://platform-control-plane:3001/agent
+      CONTROL_PLANE_HTTP_URL: http://platform-control-plane:3001
+      WORKSPACE_ROOT: /workspace
+    volumes:
+      - ./data/users/tester/workspace:/workspace
+    networks:
+      - platform-core
+
+  platform-caddy:
+    image: lucaslorentz/caddy-docker-proxy:2.9-alpine
+    container_name: platform-caddy
+    restart: unless-stopped
+    environment:
+      CADDY_INGRESS_NETWORKS: site-net
+    ports:
+      - "8080:80"
+      - "8443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - site-net
+
+  platform-monitoring:
+    image: louislam/uptime-kuma:1
+    container_name: platform-monitoring
+    restart: unless-stopped
+    ports:
+      - "3002:3001"
+    volumes:
+      - ./opt/platform/monitoring/data:/app/data
+    networks:
+      - platform-core
+
+networks:
+  platform-core:
+    name: platform-core
+  site-net:
+    name: site-net

@@ -1,0 +1,13 @@
+{
+  "name": "agent-tester",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/agent.js",
+    "check": "node --check src/agent.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

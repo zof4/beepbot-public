@@ -1,0 +1,17 @@
+{
+  "name": "platform-control-plane",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "cli": "node src/cli.js",
+    "check": "node --check src/server.js && node --check src/cli.js"
+  },
+  "dependencies": {
+    "dockerode": "^4.0.7",
+    "express": "^4.21.2",
+    "ws": "^8.18.0",
+    "zod": "^3.24.2"
+  }
+}
