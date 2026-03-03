@@ -5,9 +5,11 @@
   "type": "commonjs",
   "scripts": {
     "start": "node src/agent.js",
-    "check": "node --check src/agent.js"
+    "check": "node --check src/agent.js && node --check src/project-generator.js && node --check src/project-template.js"
   },
   "dependencies": {
-    "ws": "^8.18.0"
+    "openai": "^5.16.0",
+    "ws": "^8.18.0",
+    "zod": "^3.24.2"
   }
 }

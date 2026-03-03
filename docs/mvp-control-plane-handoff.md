@@ -2,137 +2,172 @@
 
 ## Purpose
 
-This document records what has been implemented, how it maps to the architecture plan, and what is intentionally unimplemented for this first proof-of-concept.
+This document records implemented work, how it maps to the architecture plan, and what remains for later milestones.
 
-## What was implemented
+## Implemented in this phase
 
-### 1) Infrastructure scaffold
+### 1) Repeatable PoC verification (smoke tests)
 
-- Added `docker-compose.yml` with these services:
-  - `platform-control-plane`
-  - `agent-tester`
-  - `platform-caddy`
-  - `platform-monitoring`
-- Added local data roots:
-  - `data/users/tester/workspace/`
-  - `opt/platform/monitoring/data/`
+Added:
 
-### 2) Control plane MVP
+- `scripts/smoke-test.sh` for static/default flow
+- `scripts/smoke-test-node.sh` for deterministic node runtime flow
 
-Implemented in `apps/control-plane`:
+These validate the full control-plane path:
 
-- HTTP API endpoints:
-  - `GET /health`
-  - `GET /api/status`
-  - `POST /api/messages`
-  - `POST /internal/spawn-site` (agent-only token gate)
-- WebSocket endpoint:
-  - `GET /agent?userId=tester&token=tester-dev-token`
-- Agent routing:
-  - Maintains connected agent socket map by user ID
-  - Correlates request/response with request IDs and timeout
-- Sister container spawn:
-  - Uses Docker Engine via mounted socket
-  - Starts `nginx:alpine` site containers
-  - Applies Caddy labels for dynamic routing
-  - Enforces per-container CPU/RAM caps for spawned site
-  - Mounts generated project dir read-only into site container
+1. `docker compose up -d --build`
+2. waits for `GET /health`
+3. clears existing managed site containers for the target user
+4. sends a CLI prompt
+5. verifies workspace files were created
+6. verifies the published URL returns HTTP 200
 
-### 3) Agent runtime MVP
+Node smoke additionally verifies:
 
-Implemented in `apps/agent-tester`:
+1. runtime profile returned is `node`
+2. generated project contains node runtime files
+3. spawned site `/health` returns `runtime=node`
 
-- Connects to control plane over WebSocket using hardcoded user/token.
-- Handles incoming `user_message` events.
-- Creates a score-tracker static web app in `/workspace/<slug>/`.
-- Calls `POST /internal/spawn-site` on control plane.
-- Returns `agent_response` with project and live URL metadata.
+This converts the PoC from one-off demo behavior into repeatable quality gates for both runtime branches.
 
-### 4) Control plane CLI
+### 2) Control plane user/config layer
 
-Implemented in `apps/control-plane/src/cli.js`:
+Replaced hardcoded user logic with a registry loaded from `config/users.json`.
 
-- `status`
-- `sites`
-- `send "<message>"`
+Implemented in:
 
-The CLI allows initial operation without mobile/desktop app, matching the architecture recommendation to mimic app interactions first.
+- `apps/control-plane/src/users.js`
+- `apps/control-plane/src/config.js`
+- `apps/control-plane/src/server.js`
 
-## How this maps to the architecture writeup
+Behavior now includes:
 
-### Section 1 / Section 9 (30,000 ft + Control Plane)
+- per-user agent token validation
+- configurable default user
+- quota stubs per user (`maxActiveSites`, `dailyTokenLimit`)
+- status endpoint scoped by `userId`
+- site cleanup endpoint (`DELETE /api/sites`) via control plane API/CLI
 
-Implemented core responsibility path:
+### 3) Sister container runtime profiles
 
-- app-like client message entry (via CLI)
-- control plane routing to agent container
-- control plane-managed sister container lifecycle
-- Caddy route exposure
+Expanded `spawn-site` from static-only to runtime profiles.
 
-### Section 3 / Section 12 (User Journey + Full Request Data Flow)
+Implemented in:
 
-Implemented an MVP equivalent of steps 1-9:
+- `apps/control-plane/src/docker.js`
+- `apps/control-plane/src/server.js`
 
-- input message arrives
-- routed to agent
-- agent writes project files
-- agent requests site spawn
-- control plane starts site container
-- Caddy picks labels and exposes URL
-- response returned to caller
+Supported profiles:
 
-### Section 8 (Website Hosting Sister Containers)
+- `static`
+  - busybox `httpd` serving mounted files on internal port `8080`
+- `node`
+  - Node container copies source from read-only mount
+  - installs dependencies (`npm ci` or `npm install`)
+  - executes `npm run <startScript>`
+  - reverse-proxied to configured internal port
 
-Partially implemented:
+Control plane still remains the only Docker API authority.
 
-- sister container is isolated on `site-net`
-- spawned by control plane only
-- served through Caddy label-based routing
-- read-only mount from user workspace
+### 4) Model-backed agent generation
 
-### Sections 5/6/7/10/11 (Memory, LCM, Backup, Auth, Monitoring)
+Replaced template-only generation with model-backed generation path using OpenAI SDK, with deterministic fallback.
 
-Not implemented in this MVP, except minimal uptime container presence.
+Implemented in:
 
-## Current known gaps / unimplemented pieces
+- `apps/agent-tester/src/project-generator.js`
+- `apps/agent-tester/src/project-template.js`
+- `apps/agent-tester/src/agent.js`
 
-1. Auth is hardcoded; no Clerk/JWT validation.
-2. OpenAI integration is not yet active in agent execution path.
-3. No memory subsystem (`MEMORY.md`, sqlite-vec, FTS5).
-4. No LCM immutable log / summary DAG / compaction loop.
-5. No `unf` backup and rewind integration.
-6. Monitoring stack is minimal (Uptime Kuma container only, not integrated with metrics/log pipelines).
-7. No per-user quotas, no multi-user container lifecycle.
-8. No egress firewall policy enforcement for sister containers.
-9. No persistence/cleanup policies for spawned site history beyond subdomain replacement.
-10. No mobile/desktop app transport; CLI only.
+Behavior:
 
-## Improvement plan from here
+- attempts structured JSON project generation from model (`AGENT_MODEL`, default `gpt-5-codex`)
+- validates output shape and node runtime requirements
+- falls back to local score-tracker template if key is missing or generation fails
+- supports deterministic runtime hints in prompt:
+  - `[runtime:static]`
+  - `[runtime:node]`
+- sends runtime profile to control plane for matching site spawn
 
-1. Replace hardcoded auth with JWT validation and user registry.
-2. Add real OpenAI-backed agent runtime for non-template generation.
-3. Introduce control-plane persistence (sqlite/postgres) for session/site metadata.
-4. Implement resource quota middleware on spawn requests.
-5. Expand monitoring to Prometheus + Grafana + Loki and expose key metrics.
-6. Introduce LCM and memory systems after control-plane flow is stable.
-7. Add restore pipeline and `unf` tooling hooks once filesystem lifecycle is finalized.
+## Mapping to architecture sections
 
-## Operational notes for other agents
+### Section 4 (Agent Runtime)
+
+Now closer to intended behavior:
+
+- control plane message -> agent execution -> generated project artifacts -> streamed response
+- model-backed generation is active (with fallback safeguard)
+
+### Section 8 (Website Hosting / Sister Containers)
+
+Now partially covers both static and app-runtime deployment styles:
+
+- static publishing via hardened lightweight HTTP server profile
+- Node runtime publishing with constrained resources
+- Caddy route creation through container labels
+
+### Section 9 (Control Plane)
+
+Improved authority and lifecycle controls:
+
+- user-config-driven routing
+- quota checks before site spawn
+- token validation tied to user registry
+
+### Section 12 (Data Flow)
+
+The end-to-end path is now continuously testable through smoke automation.
+
+## Operational commands
 
 1. Start stack:
    - `docker compose up -d --build`
-2. Use control plane CLI from inside container for stable networking:
-   - `docker compose exec platform-control-plane npm run cli -- send "Build me a basketball score tracker website"`
-3. Check project outputs on host:
-   - `data/users/tester/workspace/`
-4. Check live route:
-   - URL from CLI response (served through Caddy on `:8080`)
+2. Send prompt:
+   - `docker compose exec platform-control-plane npm run cli -- send --user tester "Build me a basketball score tracker website"`
+3. Check status:
+   - `docker compose exec platform-control-plane npm run cli -- status tester`
+4. Clear sites:
+   - `docker compose exec platform-control-plane npm run cli -- clear-sites tester`
+5. Run full smoke:
+   - `./scripts/smoke-test.sh`
+6. Run node runtime smoke:
+   - `./scripts/smoke-test-node.sh`
+
+## What remains unimplemented
+
+1. Clerk/JWT/OpenAI OAuth auth flow (Section 10).
+2. Persistent memory system (`MEMORY.md`, sqlite-vec, FTS5) (Section 5).
+3. LCM immutable context + compaction DAG (Section 6).
+4. `unf` backup/rewind integration and restore workflow (Section 7).
+5. Full monitoring stack integration (Prometheus/Grafana/Loki) (Section 11).
+6. Real multi-user container lifecycle orchestration (agent start/stop policies, warm pools).
+7. Strict sister-container egress firewall rules.
+8. Billing/resource enforcement beyond simple active-site quota checks.
+
+## Production path notes (Oracle Linux)
+
+- Production should set:
+  - `USER_DATA_ROOT=/data/users`
+  - `USER_DATA_ROOT_HOST=/data/users`
+- macOS dev requires host-visible paths (`${PWD}/data/users`) for Docker Desktop bind validation.
+- Control plane design remains compatible with Oracle Linux host layout in the architecture doc.
+- Added deployment assets:
+  - `deploy/oracle-linux/docker-compose.oracle-linux.yml`
+  - `deploy/oracle-linux/.env.example`
+  - `docs/oracle-linux-staging-runbook.md`
 
 ## Relevant files
 
 - `docker-compose.yml`
+- `config/users.json`
 - `apps/control-plane/src/server.js`
 - `apps/control-plane/src/docker.js`
-- `apps/control-plane/src/cli.js`
+- `apps/control-plane/src/users.js`
 - `apps/agent-tester/src/agent.js`
+- `apps/agent-tester/src/project-generator.js`
+- `apps/agent-tester/src/project-template.js`
+- `scripts/smoke-test.sh`
+- `scripts/smoke-test-node.sh`
+- `deploy/oracle-linux/docker-compose.oracle-linux.yml`
+- `docs/oracle-linux-staging-runbook.md`
 - `README.md`

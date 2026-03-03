@@ -5,17 +5,18 @@ services:
     container_name: platform-control-plane
     environment:
       CONTROL_PLANE_PORT: 3001
-      HARD_CODED_USER_ID: tester
-      HARD_CODED_USER_TOKEN: tester-dev-token
-      HARD_CODED_OPENAI_KEY: ${OPENAI_API_KEY:-sk-dev-placeholder}
+      USER_REGISTRY_PATH: /app/config/users.json
+      DEFAULT_USER_ID: tester
       USER_DATA_ROOT: /data/users
       USER_DATA_ROOT_HOST: ${PWD}/data/users
       SISTER_NETWORK: site-net
       SISTER_DOMAIN_SUFFIX: 127.0.0.1.nip.io
+      CADDY_SITE_SCHEME: http
       CADDY_EXTERNAL_PORT: 8080
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./data/users:/data/users
+      - ./config:/app/config:ro
     ports:
       - "3001:3001"
     networks:
@@ -31,6 +32,7 @@ services:
       AGENT_USER_ID: tester
       AGENT_TOKEN: tester-dev-token
       OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-dev-placeholder}
+      AGENT_MODEL: ${AGENT_MODEL:-gpt-5-codex}
       CONTROL_PLANE_WS_URL: ws://platform-control-plane:3001/agent
       CONTROL_PLANE_HTTP_URL: http://platform-control-plane:3001
       WORKSPACE_ROOT: /workspace

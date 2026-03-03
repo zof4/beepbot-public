@@ -1,51 +1,82 @@
 # BeepBot MVP Control Plane PoC
 
-This repository now contains a working MVP slice focused on the control plane path:
-
-- hardcoded user: `tester`
-- hardcoded auth token: `tester-dev-token`
-- no LCM/memory/auth integrations yet
-- Docker-based agent routing + sister site spawning via Caddy labels
+This repository implements a control-plane-first PoC aligned to the architecture plan, with a repeatable end-to-end smoke test.
 
 ## What runs
 
 `docker-compose.yml` starts 4 containers:
 
-1. `platform-control-plane` (Node.js API + WS routing + Docker spawn)
-2. `agent-tester` (hardcoded agent runtime)
+1. `platform-control-plane` (API, WebSocket routing, Docker spawn authority)
+2. `agent-tester` (single-user agent runtime)
 3. `platform-caddy` (caddy-docker-proxy)
 4. `platform-monitoring` (Uptime Kuma)
+
+## Current MVP scope
+
+- user registry driven (not hardcoded in code): `config/users.json`
+- agent token validation per user
+- control plane can spawn site containers with runtime profiles:
+  - `static` (busybox httpd)
+  - `node` (node:20-alpine with `npm run <script>`)
+- model-backed agent generation via OpenAI SDK, with deterministic fallback template if model call fails or key is unavailable
+- no Clerk/JWT, memory/LCM, `unf`, or full monitoring stack yet
 
 ## Quick start
 
 1. `docker compose up -d --build`
-2. Wait for `agent-tester` and `platform-control-plane` to be healthy/logging.
-3. Send a prompt:
-   - `docker compose exec platform-control-plane npm run cli -- send "Build me a basketball score tracker website"`
-4. Check state:
-   - `docker compose exec platform-control-plane npm run cli -- status`
+2. Send a prompt from control-plane CLI:
+   - `docker compose exec platform-control-plane npm run cli -- send --user tester "Build me a basketball score tracker website"`
+3. Check status:
+   - `docker compose exec platform-control-plane npm run cli -- status tester`
+4. Clear user sites when needed:
+   - `docker compose exec platform-control-plane npm run cli -- clear-sites tester`
+5. Force deterministic runtime for testing:
+   - `docker compose exec platform-control-plane npm run cli -- send --user tester "[runtime:node] Build a score tracker"`
+   - `docker compose exec platform-control-plane npm run cli -- send --user tester "[runtime:static] Build a score tracker"`
 
-The agent writes generated project files to:
+## Smoke test
 
-- `data/users/tester/workspace/<project-slug>/index.html`
+Run this to validate full MVP path:
 
-The response includes a live URL routed by Caddy on host port `8080`.
+- `./scripts/smoke-test.sh`
+- `./scripts/smoke-test-node.sh`
 
-## CLI commands
+What it validates:
 
-Run these in `platform-control-plane` container:
+1. stack boots
+2. control plane health endpoint responds
+3. existing managed site containers for the test user are cleared
+4. CLI prompt produces a project
+5. files are written under `data/users/<user>/workspace/`
+6. live URL returns HTTP 200
 
-- `npm run cli -- status`
-- `npm run cli -- sites`
-- `npm run cli -- send "<message>"`
+The node smoke test additionally validates:
 
-## Important MVP constraints
+1. deterministic node runtime generation using `[runtime:node]`
+2. runtime profile is `node`
+3. `/health` endpoint on the spawned site reports `runtime=node`
 
-- hardcoded single-user flow only
-- no Clerk/JWT/OpenAI OAuth
-- no persistent memory DB or LCM compaction
-- no per-user quotas or billing
-- no restore/versioning integration yet
-- macOS note: spawned site bind mounts use `USER_DATA_ROOT_HOST=${PWD}/data/users`
+## Environment notes
 
-See `docs/mvp-control-plane-handoff.md` for detailed implementation status and next steps.
+- macOS/Docker Desktop:
+  - bind mounts for sister containers use `USER_DATA_ROOT_HOST=${PWD}/data/users`
+- Oracle Linux production target:
+  - set both `USER_DATA_ROOT` and `USER_DATA_ROOT_HOST` to `/data/users`
+  - use the Oracle Linux overlay and runbook:
+    - `deploy/oracle-linux/docker-compose.oracle-linux.yml`
+    - `docs/oracle-linux-staging-runbook.md`
+
+## Key files
+
+- `docker-compose.yml`
+- `config/users.json`
+- `apps/control-plane/src/server.js`
+- `apps/control-plane/src/docker.js`
+- `apps/control-plane/src/users.js`
+- `apps/agent-tester/src/agent.js`
+- `apps/agent-tester/src/project-generator.js`
+- `scripts/smoke-test.sh`
+- `scripts/smoke-test-node.sh`
+- `deploy/oracle-linux/docker-compose.oracle-linux.yml`
+- `docs/oracle-linux-staging-runbook.md`
+- `docs/mvp-control-plane-handoff.md`

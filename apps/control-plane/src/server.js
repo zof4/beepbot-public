@@ -4,7 +4,8 @@ const express = require('express');
 const { WebSocketServer } = require('ws');
 const { z } = require('zod');
 const { config, getUserWorkspaceRootHost } = require('./config');
-const { spawnSiteContainer, listManagedSites } = require('./docker');
+const { spawnSiteContainer, listManagedSites, removeManagedSites, sanitizeSlug } = require('./docker');
+const { loadUserRegistry, buildUserMap } = require('./users');
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -12,30 +13,37 @@ app.use(express.json({ limit: '1mb' }));
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
+const registry = loadUserRegistry(config.userRegistryPath);
+const usersById = buildUserMap(registry);
+
+const fallbackDefaultUserId = registry.users[0].id;
+const resolvedDefaultUserId = usersById.has(config.defaultUserId)
+  ? config.defaultUserId
+  : fallbackDefaultUserId;
+
 const connectedAgents = new Map();
 const pendingReplies = new Map();
 
+const runtimeSchema = z.object({
+  profile: z.enum(['static', 'node']).default('static'),
+  internalPort: z.number().int().min(1).max(65535).optional(),
+  startScript: z.string().regex(/^[a-zA-Z0-9:_-]+$/).optional()
+});
+
 const messageSchema = z.object({
-  userId: z.string().min(1),
+  userId: z.string().min(1).optional(),
   message: z.string().min(1)
 });
 
 const spawnSiteSchema = z.object({
   userId: z.string().min(1),
   projectDir: z.string().min(1),
-  subdomain: z.string().min(1)
+  subdomain: z.string().min(1),
+  runtime: runtimeSchema.optional()
 });
 
-function isHardCodedUser(userId) {
-  return userId === config.hardCodedUserId;
-}
-
-function requireAgentToken(req, res, next) {
-  if (req.headers['x-agent-token'] !== config.hardCodedUserToken) {
-    res.status(401).json({ error: 'Invalid agent token' });
-    return;
-  }
-  next();
+function getUserById(userId) {
+  return usersById.get(userId) || null;
 }
 
 function sendToAgent(userId, payload) {
@@ -69,22 +77,71 @@ function awaitAgentResponse(requestId) {
   });
 }
 
+async function enforceSiteQuota({ user, userId, requestedSubdomain }) {
+  const activeSites = await listManagedSites(userId);
+  const normalizedSubdomain = sanitizeSlug(requestedSubdomain);
+  const userSubdomainLabel = `${userId}:${normalizedSubdomain}`;
+
+  const hasExistingSiteForSubdomain = activeSites.some((site) => {
+    return site.labels['platform.user-subdomain'] === userSubdomainLabel;
+  });
+
+  if (!hasExistingSiteForSubdomain && activeSites.length >= user.quotas.maxActiveSites) {
+    throw new Error(
+      `Site quota exceeded for user ${userId}: limit=${user.quotas.maxActiveSites}, active=${activeSites.length}`
+    );
+  }
+}
+
 app.get('/health', (_req, res) => {
   res.json({
     ok: true,
+    loadedUsers: Array.from(usersById.keys()),
+    defaultUserId: resolvedDefaultUserId,
     connectedAgents: Array.from(connectedAgents.keys()),
     pendingRequests: pendingReplies.size
   });
 });
 
-app.get('/api/status', async (_req, res) => {
-  const sites = await listManagedSites(config.hardCodedUserId);
+app.get('/api/status', async (req, res) => {
+  const userId = String(req.query.userId || resolvedDefaultUserId);
+  const user = getUserById(userId);
+  if (!user) {
+    res.status(404).json({ error: `Unknown user: ${userId}` });
+    return;
+  }
+
+  const sites = await listManagedSites(userId);
 
   res.json({
-    hardCodedUser: config.hardCodedUserId,
-    agentConnected: connectedAgents.has(config.hardCodedUserId),
-    activeSites: sites
+    userId,
+    defaultUserId: resolvedDefaultUserId,
+    agentConnected: connectedAgents.has(userId),
+    activeSites: sites,
+    quota: user.quotas
   });
+});
+
+app.delete('/api/sites', async (req, res) => {
+  const userId = String(req.query.userId || resolvedDefaultUserId);
+  const siteId = req.query.siteId ? String(req.query.siteId) : undefined;
+  const user = getUserById(userId);
+  if (!user) {
+    res.status(404).json({ error: `Unknown user: ${userId}` });
+    return;
+  }
+
+  try {
+    const result = await removeManagedSites({ userId, siteId });
+    res.json({
+      userId,
+      siteId: siteId || null,
+      removedCount: result.removedCount,
+      removed: result.removed
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 app.post('/api/messages', async (req, res) => {
@@ -94,13 +151,15 @@ app.post('/api/messages', async (req, res) => {
     return;
   }
 
-  const { userId, message } = parsed.data;
-  if (!isHardCodedUser(userId)) {
-    res.status(404).json({ error: 'Unknown user for MVP' });
+  const userId = parsed.data.userId || resolvedDefaultUserId;
+  const user = getUserById(userId);
+  if (!user) {
+    res.status(404).json({ error: `Unknown user: ${userId}` });
     return;
   }
 
   const requestId = randomUUID();
+  const message = parsed.data.message;
   let agentReplyPromise;
 
   try {
@@ -124,7 +183,7 @@ app.post('/api/messages', async (req, res) => {
   }
 });
 
-app.post('/internal/spawn-site', requireAgentToken, async (req, res) => {
+app.post('/internal/spawn-site', async (req, res) => {
   const parsed = spawnSiteSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.flatten() });
@@ -132,26 +191,41 @@ app.post('/internal/spawn-site', requireAgentToken, async (req, res) => {
   }
 
   const { userId, projectDir, subdomain } = parsed.data;
+  const user = getUserById(userId);
+  if (!user) {
+    res.status(404).json({ error: `Unknown user: ${userId}` });
+    return;
+  }
 
-  if (!isHardCodedUser(userId)) {
-    res.status(404).json({ error: 'Unknown user for MVP' });
+  const agentToken = req.headers['x-agent-token'];
+  if (agentToken !== user.agentToken) {
+    res.status(401).json({ error: 'Invalid agent token for user' });
     return;
   }
 
   try {
+    await enforceSiteQuota({
+      user,
+      userId,
+      requestedSubdomain: subdomain
+    });
+
     const site = await spawnSiteContainer({
       userId,
       projectDir,
       subdomain,
+      runtime: parsed.data.runtime,
       workspaceRoot: getUserWorkspaceRootHost(userId),
       sisterNetwork: config.sisterNetwork,
       sisterDomainSuffix: config.sisterDomainSuffix,
+      caddySiteScheme: config.caddySiteScheme,
       caddyExternalPort: config.caddyExternalPort
     });
 
     res.json(site);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    const statusCode = /quota exceeded/i.test(error.message) ? 429 : 500;
+    res.status(statusCode).json({ error: error.message });
   }
 });
 
@@ -164,8 +238,9 @@ server.on('upgrade', (req, socket, head) => {
 
   const userId = requestUrl.searchParams.get('userId');
   const token = requestUrl.searchParams.get('token');
+  const user = getUserById(userId);
 
-  if (!isHardCodedUser(userId) || token !== config.hardCodedUserToken) {
+  if (!user || token !== user.agentToken) {
     socket.destroy();
     return;
   }
@@ -217,5 +292,6 @@ wss.on('connection', (ws) => {
 
 server.listen(config.port, () => {
   console.log(`[control-plane] listening on ${config.port}`);
-  console.log(`[control-plane] hardcoded user=${config.hardCodedUserId}`);
+  console.log(`[control-plane] loaded users=${Array.from(usersById.keys()).join(', ')}`);
+  console.log(`[control-plane] default user=${resolvedDefaultUserId}`);
 });

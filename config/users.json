@@ -1,0 +1,12 @@
+{
+  "users": [
+    {
+      "id": "tester",
+      "agentToken": "tester-dev-token",
+      "quotas": {
+        "maxActiveSites": 3,
+        "dailyTokenLimit": 1000000
+      }
+    }
+  ]
+}

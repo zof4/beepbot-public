@@ -1,5 +1,5 @@
 const baseUrl = process.env.CONTROL_PLANE_HTTP_URL || 'http://localhost:3001';
-const hardcodedUser = process.env.CLI_USER_ID || 'tester';
+const defaultUser = process.env.CLI_USER_ID || process.env.DEFAULT_USER_ID || 'tester';
 
 async function request(path, options = {}) {
   const response = await fetch(`${baseUrl}${path}`, {
@@ -20,9 +20,10 @@ async function request(path, options = {}) {
 
 function usage() {
   console.log('Usage:');
-  console.log('  npm run cli -- status');
-  console.log('  npm run cli -- sites');
-  console.log('  npm run cli -- send "Build me a basketball score tracker website"');
+  console.log('  npm run cli -- status [userId]');
+  console.log('  npm run cli -- sites [userId]');
+  console.log('  npm run cli -- clear-sites [userId] [siteId]');
+  console.log('  npm run cli -- send [--user <userId>] "Build me a basketball score tracker website"');
 }
 
 async function main() {
@@ -35,19 +36,54 @@ async function main() {
   }
 
   if (command === 'status') {
-    const status = await request('/api/status');
+    const userId = args[0] || defaultUser;
+    const status = await request(`/api/status?userId=${encodeURIComponent(userId)}`);
     console.log(JSON.stringify(status, null, 2));
     return;
   }
 
   if (command === 'sites') {
-    const status = await request('/api/status');
+    const userId = args[0] || defaultUser;
+    const status = await request(`/api/status?userId=${encodeURIComponent(userId)}`);
     console.log(JSON.stringify(status.activeSites, null, 2));
     return;
   }
 
+  if (command === 'clear-sites') {
+    const userId = args[0] || defaultUser;
+    const siteId = args[1];
+    const query = new URLSearchParams({ userId });
+    if (siteId) {
+      query.set('siteId', siteId);
+    }
+    const response = await request(`/api/sites?${query.toString()}`, {
+      method: 'DELETE'
+    });
+    console.log(JSON.stringify(response, null, 2));
+    return;
+  }
+
   if (command === 'send') {
-    const message = args.join(' ').trim();
+    if (!args.length) {
+      throw new Error('Message is required for send command');
+    }
+
+    let userId = defaultUser;
+    let messageParts = args.slice();
+
+    if (messageParts[0] === '--user') {
+      userId = messageParts[1];
+      messageParts = messageParts.slice(2);
+    } else if (messageParts[0] && messageParts[0].startsWith('--user=')) {
+      userId = messageParts[0].slice('--user='.length);
+      messageParts = messageParts.slice(1);
+    }
+
+    if (!userId || !/^[a-zA-Z0-9_-]+$/.test(userId)) {
+      throw new Error('A valid userId is required when using --user');
+    }
+
+    const message = messageParts.join(' ').trim();
     if (!message) {
       throw new Error('Message is required for send command');
     }
@@ -55,7 +91,7 @@ async function main() {
     const response = await request('/api/messages', {
       method: 'POST',
       body: JSON.stringify({
-        userId: hardcodedUser,
+        userId,
         message
       })
     });
